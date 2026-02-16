@@ -126,6 +126,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--no_sort", action='store_true', help="Disable sorting images into model subfolders.")
     parser.add_argument("--max_path", type=int, default=DEFAULT_MAX_PATH_LENGTH, help="Approximate max length for file paths.")
     parser.add_argument("--retries", type=int, default=DEFAULT_RETRIES, help="Number of retries for failures.")
+    parser.add_argument("--max_images", type=int, default=None, help="Maximum number of images to download (default: unlimited).")
+    parser.add_argument("--max_per_model", type=int, default=None, help="Maximum images per model during tag searches (default: unlimited).")
     return parser.parse_args()
 
 # ==========================
@@ -210,6 +212,12 @@ class CivitaiDownloader:
         self.run_results: Dict[str, Dict[str, Any]] = {}
         self.skipped_reasons_summary: Dict[str, int] = {}
         self.failed_urls: List[str] = []
+
+        # --- Image Limit Tracking (Issue #8) ---
+        self.max_images: Optional[int] = self._get_max_images()
+        self.max_per_model: Optional[int] = args.max_per_model
+        self.images_downloaded_count: int = 0
+        self.per_model_counts: Dict[int, int] = {}  # {model_version_id: count}
         self.failed_search_requests: List[str] = []
 
         # --- Log Initialized Config ---
@@ -366,6 +374,30 @@ class CivitaiDownloader:
             valid_val = self.args.semaphore_limit if self.args.semaphore_limit is not None and self.args.semaphore_limit > 0 else DEFAULT_SEMAPHORE_LIMIT
             self.logger.debug(f"Using default/parsed semaphore limit: {valid_val}")
             return valid_val
+
+    def _get_max_images(self) -> Optional[int]:
+        """Get maximum images limit, prompting in interactive mode if not set via CLI."""
+        if self.args.max_images is not None:
+            return self.args.max_images
+        elif self._is_interactive_mode():
+            self.logger.debug("Prompting user for image limit...")
+            while True:
+                try:
+                    inp = input("Limit number of images? (Enter number or press Enter for unlimited): ").strip()
+                    if not inp:
+                        self.logger.info("No image limit set (unlimited)")
+                        return None
+                    val = int(inp)
+                    if val <= 0:
+                        print("Invalid input. Must be positive number.")
+                        continue
+                    self.logger.info(f"Image limit set to: {val}")
+                    print(f"✅ Will download maximum of {val} images")
+                    return val
+                except ValueError:
+                    print("Invalid input. Must be a number.")
+        else:
+            return None  # Not interactive, no limit
 
     # --- Result Dictionary Access Helper ---
     def _get_result_entry(self, parent_key: Optional[str], model_id: Optional[int] = None) -> Optional[Dict]:
@@ -724,7 +756,12 @@ class CivitaiDownloader:
                 prompt_preview = extracted_meta.get("prompt", "")[:100]
                 self.logger.debug(f"DEBUG - Prompt preview: {prompt_preview}...")
         for item in items:
-            image_id = item.get('id'); 
+            # Issue #8: Check global image limit (including pending tasks)
+            if self.max_images and (self.images_downloaded_count + len(tasks)) >= self.max_images:
+                self.logger.info(f"Reached maximum image limit ({self.max_images}). Stopping download.")
+                break  # Stop processing more items
+
+            image_id = item.get('id');
             if not image_id: continue
             should_skip, skip_reason = False, None
             result_entry = self._get_result_entry(parent_result_key, model_id)
@@ -733,6 +770,15 @@ class CivitaiDownloader:
                 skip_reason = "Already tracked"; should_skip = True
                 if current_tag: # Update tags in DB if needed? Requires SELECT+UPDATE - skip for now. Pass.
                     pass # Simpler: Don't update tags on skipped items via this path.
+            # Issue #8: Per-model limit check (tag search mode only)
+            if not should_skip and self.max_per_model and self.mode == '3':  # Tag search mode
+                model_version_ids = item.get('modelVersionIds', [])
+                if model_version_ids:
+                    # Check if any of the models for this image have reached their limit
+                    for mv_id in model_version_ids:
+                        if self.per_model_counts.get(mv_id, 0) >= self.max_per_model:
+                            skip_reason = f"Per-model limit reached (model {mv_id})"; should_skip = True
+                            break
             # Tag Prompt Check
             if not should_skip and tag_to_check and not disable_prompt_check:
                  meta = extract_image_meta(item)
@@ -785,6 +831,14 @@ class CivitaiDownloader:
                          model_name_for_meta = base_model
                          checkpoint_name = base_model
              if result_entry: result_entry['success_count'] += 1
+
+             # Issue #8: Increment download counters
+             self.images_downloaded_count += 1
+             if self.mode == '3':  # Tag search mode - track per-model counts
+                 model_version_ids = item.get('modelVersionIds', [])
+                 for mv_id in model_version_ids:
+                     self.per_model_counts[mv_id] = self.per_model_counts.get(mv_id, 0) + 1
+
              tags_to_mark = [current_tag] if current_tag else []
              await self.mark_image_as_downloaded(str(image_id), final_image_path, self.quality, tags=tags_to_mark, url=item.get('url'), checkpoint_name=checkpoint_name, context=parent_result_key)
              await self._write_meta_data(meta, base_path_no_ext, str(image_id), username, base_model=model_name_for_meta)
@@ -851,6 +905,14 @@ class CivitaiDownloader:
                       current_downloads = result_entry.get('success_count', 0)
                       current_skipped = result_entry.get('skipped_count', 0)
                       print(f"[{identifier_display}] Page {page_count}: Downloaded {current_downloads} | Skipped {current_skipped} | API items processed: {identifier_api_items}")
+
+                      # Issue #8: Check if image limit reached, stop pagination if so
+                      if self.max_images and self.images_downloaded_count >= self.max_images:
+                          self.logger.info(f"Global image limit ({self.max_images}) reached. Stopping pagination.")
+                          print(f"\n✅ Reached image limit of {self.max_images}. Stopping download.")
+                          identifier_status = 'Completed (Limit Reached)'
+                          break  # Exit pagination loop
+
                  elif page_count == 1: # No items on the first page (and not a "Not Found" error)
                       identifier_status = 'Completed (No Items Found)'
                       self.logger.warning(f"No items found for {os.path.basename(target_dir)} (User/Model/Version may have no images).")
@@ -1624,6 +1686,23 @@ class CivitaiDownloader:
             print("\nReasons for skipping/failing items across run:")
             sorted_reasons = sorted(self.skipped_reasons_summary.items(), key=lambda item: item[1], reverse=True)
             for reason, count in sorted_reasons: print(f"- {reason}: {count} times")
+
+        # Issue #8: Print image limit information
+        if self.max_images or self.max_per_model:
+            print("\n--- Image Limits ---")
+            if self.max_images:
+                status = "REACHED" if self.images_downloaded_count >= self.max_images else "NOT REACHED"
+                print(f"Global limit: {self.images_downloaded_count}/{self.max_images} images [{status}]")
+            if self.max_per_model and self.mode == '3':
+                print(f"Per-model limit: {self.max_per_model} images per model")
+                if self.per_model_counts:
+                    print("  Per-model breakdown:")
+                    sorted_models = sorted(self.per_model_counts.items(), key=lambda x: x[1], reverse=True)
+                    for mv_id, count in sorted_models[:10]:  # Show top 10 models
+                        status_icon = "⚠️" if count >= self.max_per_model else "✓"
+                        print(f"    {status_icon} Model {mv_id}: {count} images")
+                    if len(sorted_models) > 10:
+                        print(f"    ... and {len(sorted_models) - 10} more models")
 
         # --- Stage 3: Print Per-Identifier Breakdown (using calculated counts) ---
         print("\n--- Results per Identifier ---")
