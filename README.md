@@ -82,6 +82,8 @@ Provide arguments directly on the command line. Unspecified arguments will use t
 *   `--no_sort` (Disables model subfolder sorting, Default: False/Sorting enabled)
 *   `--max_path INT` (Default: 240)
 *   `--retries INT` (Default: 2)
+*   `--max_images INT` (Limit total images downloaded, Default: unlimited) 
+*   `--max_per_model INT` (Limit images per model in tag searches, Default: unlimited) 
 
 ## Examples
 
@@ -101,6 +103,14 @@ Provide arguments directly on the command line. Unspecified arguments will use t
     ```bash
     python civit_image_downloader.py --mode 4 --model_version_id "123456" --filter_tags "anime,portrait" --disable_prompt_check y
     ```
+*   Download only 100 images from user "artist1" (useful for testing or sampling):
+    ```bash
+    python civit_image_downloader.py --mode 1 --username "artist1" --max_images 100
+    ```
+*   Download images from tag search with per-model limit (balanced sampling):
+    ```bash
+    python civit_image_downloader.py --mode 3 --tags "landscape" --max_per_model 50 --max_images 500
+
 
 ## Mixed Mode
 
@@ -212,6 +222,28 @@ python migrate_json_to_sqlite.py
 
 
 # Update History
+
+## 1.6 New Feature - Image Limits
+
+**New Parameters:**
+- `--max_images ` - Limit total images downloaded 
+- `--max_per_model ` - Limit images per model in tag searches 
+
+**Features:**
+- Stops pagination early when limit reached (saves API calls)
+- Only counts successful downloads (skipped images don't count toward limit)
+- Clear progress reporting showing limit status
+- Works with all modes (user, model, tag, model version)
+- Fully backwards compatible (unlimited by default)
+
+**Examples:**
+```bash
+# Download only 50 images from a user
+python civit_image_downloader.py --mode 1 --username artist1 --max_images 50
+
+# Tag search with balanced sampling (max 10 per model, 100 total)
+python civit_image_downloader.py --mode 3 --tags "anime" --max_per_model 10 --max_images 100
+```
 
 ## 1.5 Bug Fixes <br />
 
