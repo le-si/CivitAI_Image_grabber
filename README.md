@@ -112,6 +112,7 @@ Provide arguments directly on the command line. Unspecified arguments will use t
     python civit_image_downloader.py --mode 3 --tags "landscape" --max_per_model 50 --max_images 500
 
 
+
 ## Mixed Mode
 
 If only some arguments are provided (e.g., only `--mode`), the script will use the provided options and prompt the user for any missing inputs.
@@ -235,15 +236,7 @@ python migrate_json_to_sqlite.py
 - Clear progress reporting showing limit status
 - Works with all modes (user, model, tag, model version)
 - Fully backwards compatible (unlimited by default)
-
-**Examples:**
-```bash
-# Download only 50 images from a user
-python civit_image_downloader.py --mode 1 --username artist1 --max_images 50
-
-# Tag search with balanced sampling (max 10 per model, 100 total)
-python civit_image_downloader.py --mode 3 --tags "anime" --max_per_model 10 --max_images 100
-```
+  
 
 ## 1.5 Bug Fixes <br />
 
