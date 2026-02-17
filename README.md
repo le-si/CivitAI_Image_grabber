@@ -51,6 +51,8 @@ the script will ask you to:
 5.  `Enter max concurrent downloads [default: 5]:` 
 6.  *(Mode-specific prompts):*
     *   Mode 1: `Enter username(s) (, separated):`
+    *   Mode 1: `Enter filter tag(s) (comma-separated, optional, press Enter to skip):` (Optional: filter images by tags)
+    *   Mode 1: `Disable prompt check? (y/n) [default: n]:` (If filter tags are provided)
     *   Mode 2: `Enter model ID(s) (numeric, , separated):`
     *   Mode 3: `Enter tags (, separated):`
     *   Mode 3: `Disable prompt check? (y/n) [default: n]:` (Check if tag words must be in the image prompt)
@@ -72,11 +74,11 @@ Provide arguments directly on the command line. Unspecified arguments will use t
 *   `--redownload {1,2}` (1=Yes, 2=No, Default: 2)
 *   `--mode {1,2,3,4}` (**Required**)
 *   `--tags TAGS` (Comma-separated, required for Mode 3)
-*   `--disable_prompt_check {y,n}` (Default: n, works with Mode 3 and Mode 4) 
+*   `--disable_prompt_check {y,n}` (Default: n, works with Mode 1 (with filter_tags), Mode 3 and Mode 4)  
 *   `--username USERNAMES` (Comma-separated, required for Mode 1)
 *   `--model_id IDS` (Comma-separated, numeric, required for Mode 2)
 *   `--model_version_id IDS` (Comma-separated, numeric, required for Mode 4)
-*   `--filter_tags TAGS` (Comma-separated, optional for Mode 4, filters images by tags)
+*   `--filter_tags TAGS` (Comma-separated, optional for Mode 1 and Mode 4, filters images by tags)   
 *   `--output_dir PATH` (Default: "image_downloads")
 *   `--semaphore_limit INT` (Default: 5)
 *   `--no_sort` (Disables model subfolder sorting, Default: False/Sorting enabled)
@@ -102,6 +104,10 @@ Provide arguments directly on the command line. Unspecified arguments will use t
 *   Download images from model version 123456, filtered by tags "anime" and "portrait":
     ```bash
     python civit_image_downloader.py --mode 4 --model_version_id "123456" --filter_tags "anime,portrait" --disable_prompt_check y
+    ```
+*   Download only "anime" images from a specific username (Mode 1 + tag filter):
+    ```bash
+    python civit_image_downloader.py --mode 1 --username "artist123" --filter_tags "anime" --max_images 50
     ```
 *   Download only 100 images from user "artist1" (useful for testing or sampling):
     ```bash
@@ -224,32 +230,61 @@ python migrate_json_to_sqlite.py
 
 # Update History
 
+## 1.8 Username Search with Tag Filtering  <br />
+
+Mode 1 now supports `--filter_tags`, allowing you to download only images from a specific user that match certain tags. Previously, username search and tag filtering were completely separate modes.
+
+**New Interactive Prompts for Mode 1:**
+```
+Enter filter tag(s) (comma-separated, optional, press Enter to skip):
+Disable prompt check? (y/n) [default: n]:
+```
+
+**Example Scenarios:**
+ 
+- Download only "anime" images from a specific artist
+```bash
+python civit_image_downloader.py --mode 1 --username "artist123" --filter_tags "anime" --max_images 50
+```
+- Multiple tags (image must match ALL tags)
+```bash
+
+python civit_image_downloader.py --mode 1 --username "artist123" --filter_tags "woman,photorealistic" --max_images 30
+```
+- Disable prompt check for faster (less strict) filtering
+```bash
+python civit_image_downloader.py --mode 1 --username "photographer_xyz" --filter_tags "portrait" --disable_prompt_check y
+```
 ## 1.7 New Feature Target-Specific Database Clearing  <br /> 
 
 The `--redownload 1` option has been enhanced to support **selective clearing** of database history. When re-downloading, the script now automatically clears only the specific target being processed, leaving all other download records untouched.<br />
 - Each download is now tagged with its target type and value (`username:artist1`, `model:12345`, etc.)
 - Database migration automatically adds target tracking columns on first run (non-destructive, preserves all existing data)
-- When `--redownload 1` is used, the script clears only the current target's records before redownloading.
-- **Example Scenarios:**
+- When `--redownload 1` is used, the script clears only the current target's records before redownloading. <br />
 
-*Scenario 1: Re-download one user*
+**Example Scenarios:**
+
+- Scenario 1: Re-download one user
 ```bash
 python civit_image_downloader.py --mode 1 --username "artist1" --redownload 1 --quality 1
-# Output: Cleared 150 previous downloads for username: artist1
-# Result: Only artist1's records cleared, other users untouched
 ```
+ Output: Cleared 150 previous downloads for username: artist1
+ Result: Only artist1's records cleared, other users untouched
 
-*Scenario 2: Multiple users in one run*
+
+- Scenario 2: Multiple users in one run
 ```bash
 python civit_image_downloader.py --mode 1 --username "Bob,Alice,Charlie" --redownload 1 --quality 1
-# Result: Bob cleared → Bob downloaded → Alice cleared → Alice downloaded → Charlie cleared → Charlie downloaded
 ```
+ Result: Bob cleared → Bob downloaded → Alice cleared → Alice downloaded → Charlie cleared → Charlie downloaded
 
-*Scenario 3: Normal download (no clearing)*
+
+- Scenario 3: Normal download (no clearing)
 ```bash
 python civit_image_downloader.py --mode 1 --username "artist1" --redownload 2 --quality 1
-# Result: No clearing, skips already-downloaded images (default behavior unchanged)
 ```
+ Result: No clearing, skips already-downloaded images (default behavior unchanged)
+
 
 - **Database Schema:**
 - Added `target_type` column (stores: `username`, `model`, `tag`, `modelVersion`)
