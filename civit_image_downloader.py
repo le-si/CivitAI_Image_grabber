@@ -116,11 +116,11 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--redownload", type=int, choices=[1, 2], default=2, help="Allow re-downloading tracked images: 1=Yes, 2=No.")
     parser.add_argument("--mode", type=int, choices=[1, 2, 3, 4], required=not sys.stdin.isatty(), help="Download mode (required if not interactive).")
     parser.add_argument("--tags", help="Tag(s) for Mode 3 (comma-separated).")
-    parser.add_argument("--disable_prompt_check", choices=['y', 'n'], default='n', help="Disable prompt check in Mode 3 and Mode 4 (y/n).")
+    parser.add_argument("--disable_prompt_check", choices=['y', 'n'], default='n', help="Disable prompt check in Mode 1 (with filter_tags), Mode 3, and Mode 4 (y/n).")
     parser.add_argument("--username", help="Username(s) for Mode 1 (comma-separated).")
     parser.add_argument("--model_id", help="Model ID(s) for Mode 2 (comma-separated, numeric).")
     parser.add_argument("--model_version_id", help="Model Version ID(s) for Mode 4 (comma-separated, numeric).")
-    parser.add_argument("--filter_tags", help="Filter by tag(s) in Mode 4 (comma-separated). Only downloads images matching these tags.")
+    parser.add_argument("--filter_tags", help="Filter by tag(s) in Mode 1 and Mode 4 (comma-separated). Only downloads images matching these tags.")
     parser.add_argument("--output_dir", default=DEFAULT_OUTPUT_DIR, help="Base directory for downloads.")
     parser.add_argument("--semaphore_limit", type=int, default=DEFAULT_SEMAPHORE_LIMIT, help="Max concurrent downloads/API calls.")
     parser.add_argument("--no_sort", action='store_true', help="Disable sorting images into model subfolders.")
@@ -1291,30 +1291,37 @@ class CivitaiDownloader:
             
 
             else: # Modes 1, 2, 4 (Username, ModelID, ModelVersionID)
-                # Get filter tags and prompt check option for Mode 4
-                filter_tags_mode4 = None
-                disable_prompt_check_mode4 = False
-                if self.mode == '4':
-                    filter_tags_mode4 = self._get_filter_tags()
-                    if filter_tags_mode4:
-                        disable_prompt_check_mode4 = self._get_disable_prompt_check()
-                        self.logger.info(f"Mode 4 Tag Filtering: {filter_tags_mode4}, Prompt Check: {'Disabled' if disable_prompt_check_mode4 else 'Enabled'}")
+                # Issue #41: Get filter tags and prompt check option for Mode 1 and Mode 4
+                filter_tags = None
+                disable_prompt_check = False
+                if self.mode in ['1', '4']:
+                    filter_tags = self._get_filter_tags()
+                    if filter_tags:
+                        disable_prompt_check = self._get_disable_prompt_check()
+                        mode_name = "Mode 1" if self.mode == '1' else "Mode 4"
+                        self.logger.info(f"{mode_name} Tag Filtering: {filter_tags}, Prompt Check: {'Disabled' if disable_prompt_check else 'Enabled'}")
 
                 for idt, ident in identifiers_to_process:
                      result_key = f"{idt}:{ident}"; valid, reason = await self._validate_identifier_basic(ident, idt)
                      if not valid: self.run_results[result_key].update({'status':'Failed (Validation)', 'reason': reason}); continue
                      target_dir, url, mode_info = "", "", None
                      url_params = f"&nsfw=X&sort=Newest" if idt == 'username' else "&nsfw=X"
-                     if idt == 'username': target_dir = os.path.join(option_folder, self._clean_path_component(ident)); url = f"{self.base_url}?username={ident}{url_params}"
+                     if idt == 'username':
+                         target_dir = os.path.join(option_folder, self._clean_path_component(ident))
+                         url = f"{self.base_url}?username={ident}{url_params}"
+                         # Issue #41: Apply filter tags for Mode 1 if provided
+                         if filter_tags:
+                             tag_to_check = "_".join(filter_tags)
+                             mode_info = {'tag_to_check': tag_to_check, 'disable_prompt_check': disable_prompt_check, 'current_tag': None}
                      elif idt == 'model': target_dir = os.path.join(option_folder, f"model_{ident}"); url = f"{self.base_url}?modelId={ident}{url_params}"
                      elif idt == 'modelVersion':
                          target_dir = os.path.join(option_folder, f"modelVersion_{ident}")
                          url = f"{self.base_url}?modelVersionId={ident}{url_params}"
                          # Apply filter tags for Mode 4 if provided
-                         if filter_tags_mode4:
+                         if filter_tags:
                              # Use first filter tag as the tag to check (combine if multiple)
-                             tag_to_check = "_".join(filter_tags_mode4)
-                             mode_info = {'tag_to_check': tag_to_check, 'disable_prompt_check': disable_prompt_check_mode4, 'current_tag': None}
+                             tag_to_check = "_".join(filter_tags)
+                             mode_info = {'tag_to_check': tag_to_check, 'disable_prompt_check': disable_prompt_check, 'current_tag': None}
                      if target_dir and url: os.makedirs(target_dir, exist_ok=True); tasks.append(self._run_paginated_download(url, target_dir, mode_info, parent_result_key=result_key))
                      else: self.run_results[result_key].update({'status':'Failed', 'reason':'Internal setup error'})
                 # --- Execute all collected tasks for modes 1, 2, 4 ---
@@ -1815,7 +1822,7 @@ class CivitaiDownloader:
         """Logs warnings if CLI arguments conflict with the selected mode."""
         if not self.mode or self.mode not in ['1', '2', '3', '4']: return
         mode = int(self.mode); relevant_args = []; unused_args = []
-        if mode == 1: relevant_args = ['username']
+        if mode == 1: relevant_args = ['username', 'filter_tags', 'disable_prompt_check']
         elif mode == 2: relevant_args = ['model_id']
         elif mode == 3: relevant_args = ['tags', 'disable_prompt_check']
         elif mode == 4: relevant_args = ['model_version_id', 'filter_tags', 'disable_prompt_check']
