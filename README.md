@@ -224,7 +224,41 @@ python migrate_json_to_sqlite.py
 
 # Update History
 
-## 1.6 New Feature - Image Limits
+## 1.7 New Feature Target-Specific Database Clearing  <br /> 
+
+The `--redownload 1` option has been enhanced to support **selective clearing** of database history. When re-downloading, the script now automatically clears only the specific target being processed, leaving all other download records untouched.<br />
+- Each download is now tagged with its target type and value (`username:artist1`, `model:12345`, etc.)
+- Database migration automatically adds target tracking columns on first run (non-destructive, preserves all existing data)
+- When `--redownload 1` is used, the script clears only the current target's records before redownloading.
+- **Example Scenarios:**
+
+*Scenario 1: Re-download one user*
+```bash
+python civit_image_downloader.py --mode 1 --username "artist1" --redownload 1 --quality 1
+# Output: Cleared 150 previous downloads for username: artist1
+# Result: Only artist1's records cleared, other users untouched
+```
+
+*Scenario 2: Multiple users in one run*
+```bash
+python civit_image_downloader.py --mode 1 --username "Bob,Alice,Charlie" --redownload 1 --quality 1
+# Result: Bob cleared → Bob downloaded → Alice cleared → Alice downloaded → Charlie cleared → Charlie downloaded
+```
+
+*Scenario 3: Normal download (no clearing)*
+```bash
+python civit_image_downloader.py --mode 1 --username "artist1" --redownload 2 --quality 1
+# Result: No clearing, skips already-downloaded images (default behavior unchanged)
+```
+
+- **Database Schema:**
+- Added `target_type` column (stores: `username`, `model`, `tag`, `modelVersion`)
+- Added `target_value` column (stores: actual username, model ID, tag name, or version ID)
+- Created index for fast queries by target
+- Fully backwards compatible (old records with NULL targets preserved and functional)
+
+
+## 1.6 New Feature - Image Limits <br />
 
 **New Parameters:**
 - `--max_images ` - Limit total images downloaded 
