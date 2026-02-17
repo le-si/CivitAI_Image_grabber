@@ -260,6 +260,10 @@ class CivitaiDownloader:
             ''')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_image_tags_tag ON image_tags (tag)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_image_tags_key ON image_tags (image_key)')
+
+            # Issue #58: Migrate database to add target tracking
+            self._migrate_database_add_target_tracking(cursor)
+
             self.db_conn.commit()
             self.logger.debug("Database schema initialized successfully (Relational Tags).")
         except sqlite3.Error as e:
@@ -269,6 +273,24 @@ class CivitaiDownloader:
                  try: self.db_conn.close()
                  except sqlite3.Error: pass
             sys.exit(1)
+
+    def _migrate_database_add_target_tracking(self, cursor) -> None:
+        """Issue #58: Add target_type and target_value columns for per-target DB management."""
+        try:
+            # Check if migration is needed
+            cursor.execute("PRAGMA table_info(tracked_images)")
+            columns = [col[1] for col in cursor.fetchall()]
+
+            if 'target_type' not in columns:
+                self.logger.info("Migrating database: adding target tracking columns...")
+                cursor.execute("ALTER TABLE tracked_images ADD COLUMN target_type TEXT")
+                cursor.execute("ALTER TABLE tracked_images ADD COLUMN target_value TEXT")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracked_images_target ON tracked_images (target_type, target_value)")
+                self.logger.info("✅ Database migration complete: target tracking added")
+            else:
+                self.logger.debug("Target tracking columns already exist, skipping migration")
+        except sqlite3.Error as e:
+            self.logger.warning(f"Database migration failed (non-critical): {e}")
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Lazily creates and returns the shared httpx.AsyncClient instance."""
@@ -481,15 +503,21 @@ class CivitaiDownloader:
         tags = tags or []
         unique_tags = sorted(list(set(t for t in tags if t))) # Ensure unique, non-empty
 
+        # Issue #58: Extract target type and value from context
+        target_type, target_value = None, None
+        if context and ':' in context:
+            parts = context.split(':', 1)
+            target_type, target_value = parts[0], parts[1]
+
         async with self.tracking_lock: # Lock for the entire transaction
              cursor = self.db_conn.cursor()
              try:
-                 # 1. Upsert main image data
+                 # 1. Upsert main image data (Issue #58: Added target tracking)
                  cursor.execute('''
                      INSERT OR REPLACE INTO tracked_images
-                     (image_key, image_id, quality, path, download_date, url, checkpoint_name)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                 ''', (image_key, image_id_str, quality, image_path, current_date, url, checkpoint_name))
+                     (image_key, image_id, quality, path, download_date, url, checkpoint_name, target_type, target_value)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ''', (image_key, image_id_str, quality, image_path, current_date, url, checkpoint_name, target_type, target_value))
                  # 2. Delete existing tags for this image
                  cursor.execute('DELETE FROM image_tags WHERE image_key = ?', (image_key,))
                  # 3. Insert new tags if any
@@ -504,6 +532,40 @@ class CivitaiDownloader:
                  try: self.db_conn.rollback()
                  except sqlite3.Error as rb_e: self.logger.error(f"Rollback failed: {rb_e}")
 
+    def clear_target_history(self, target_type: str, target_value: str) -> int:
+        """Issue #58: Clear all tracked images for a specific target.
+
+        Args:
+            target_type: Type of target ('username', 'model', 'tag', 'modelVersion')
+            target_value: The actual username, model ID, tag name, or version ID
+
+        Returns:
+            Number of records deleted
+
+        Example:
+            downloader.clear_target_history('username', 'artist1')
+        """
+        if not self.db_conn:
+            self.logger.warning("Cannot clear target history: No database connection")
+            return 0
+
+        try:
+            cursor = self.db_conn.cursor()
+            cursor.execute(
+                "DELETE FROM tracked_images WHERE target_type = ? AND target_value = ?",
+                (target_type, target_value)
+            )
+            count = cursor.rowcount
+            self.db_conn.commit()
+            self.logger.info(f"Cleared {count} tracked images for {target_type}={target_value}")
+            return count
+        except sqlite3.Error as e:
+            self.logger.error(f"Error clearing target history for {target_type}={target_value}: {e}")
+            try:
+                self.db_conn.rollback()
+            except sqlite3.Error:
+                pass
+            return 0
 
         # ===================================
         # --- Core Download/File Methods ---
@@ -859,6 +921,14 @@ class CivitaiDownloader:
         # Bug #50 enhancement: Print status message when starting to process an identifier
         identifier_display = parent_result_key if not model_id else f"{parent_result_key} → model_{model_id}"
         print(f"\n{'='*60}\nStarting: {identifier_display}\n{'='*60}")
+
+        # Issue #58: Clear target history if re-downloading
+        if self.allow_redownload == 1 and parent_result_key and ':' in parent_result_key:
+            target_type, target_value = parent_result_key.split(':', 1)
+            cleared_count = self.clear_target_history(target_type, target_value)
+            if cleared_count > 0:
+                print(f"🗑️  Cleared {cleared_count} previous downloads for {target_type}: {target_value}")
+                self.logger.info(f"Cleared {cleared_count} tracked images before re-downloading {parent_result_key}")
 
         while url:
              page_count += 1
