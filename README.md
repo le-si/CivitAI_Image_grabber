@@ -230,6 +230,17 @@ python migrate_json_to_sqlite.py
 
 # Update History
 
+## 1.9 Security Update 
+
+Fix 1 — SSRF protection (_validate_next_page()):                                                                                                                                                                                    
+  - Any nextPage URL from the API now passes three checks before being followed: must be https://, must be civitai.com or www.civitai.com, must start with /api/                                                                      
+  - Applied to both pagination loops (_run_paginated_download and _search_models_by_tag)                                                                                                                                              
+  - Invalid URLs log a warning and stop pagination gracefully rather than raising
+
+  - Fix 2 — URL encoding (quote()):                                                                                                                                                                                                     
+  - username in Mode 1: quote(ident, safe='') — handles any special character a CivitAI username could contain                                                                                                                        
+  - Tag in _search_models_by_tag: replaces the partial .replace(" ", "%20") with proper RFC 3986 encoding       
+
 ## 1.8 Username Search with Tag Filtering  <br />
 
 Mode 1 now supports `--filter_tags`, allowing you to download only images from a specific user that match certain tags. Previously, username search and tag filtering were completely separate modes.
