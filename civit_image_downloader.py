@@ -12,9 +12,10 @@ import re
 from datetime import datetime
 import logging
 import csv
-import sqlite3 
+import sqlite3
 from asyncio import Lock, Semaphore
 import argparse
+from urllib.parse import quote, urlparse
 from typing import Optional, Tuple, List, Dict, Any, AsyncGenerator
 
 # Color Code
@@ -46,6 +47,7 @@ except ImportError:
 # ===================
 BASE_API_URL: str = "https://civitai.com/api/v1/images"
 MODELS_API_URL: str = "https://civitai.com/api/v1/models"
+ALLOWED_API_HOSTS: frozenset = frozenset({"civitai.com", "www.civitai.com"})
 DEFAULT_HEADERS: Dict[str, str] = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0", 
     "Content-Type": "application/json"
@@ -54,7 +56,7 @@ DEFAULT_SEMAPHORE_LIMIT: int = 5
 DEFAULT_OUTPUT_DIR: str = "image_downloads"
 DATABASE_FILENAME: str = "tracking_database.sqlite" # <--- SQLite DB filename
 LOG_FILENAME_TEMPLATE: str = "civit_image_downloader_log_{version}.txt"
-SCRIPT_VERSION: str = "1.3-sqlite" 
+SCRIPT_VERSION: str = "1.8" 
 DEFAULT_TIMEOUT: int = 60
 DEFAULT_RETRIES: int = 2
 DEFAULT_MAX_PATH_LENGTH: int = 240
@@ -448,6 +450,30 @@ class CivitaiDownloader:
         elif id_type == 'tag':
             if not identifier or identifier.isspace(): return False, "Tag cannot be empty."
         return True, None
+
+    def _validate_next_page(self, url: Optional[str]) -> Optional[str]:
+        """Validates a pagination URL from the API to prevent SSRF attacks.
+
+        Ensures the URL uses HTTPS, belongs to civitai.com, and points to an
+        /api/ path before following it. Rejects anything else.
+        """
+        if not url:
+            return None
+        try:
+            p = urlparse(url)
+            if p.scheme != "https":
+                self.logger.warning(f"Rejected non-HTTPS nextPage URL (scheme: {p.scheme!r})")
+                return None
+            if p.netloc not in ALLOWED_API_HOSTS:
+                self.logger.warning(f"Rejected nextPage URL with unexpected host: {p.netloc!r}")
+                return None
+            if not p.path.startswith("/api/"):
+                self.logger.warning(f"Rejected nextPage URL with unexpected path: {p.path!r}")
+                return None
+            return url
+        except Exception as e:
+            self.logger.warning(f"Failed to parse nextPage URL: {e}")
+            return None
 
     # --- SQLite Tracking Methods ---
     async def check_if_image_downloaded(self, image_id: str, quality: str, context: Optional[str] = None) -> bool:
@@ -990,7 +1016,7 @@ class CivitaiDownloader:
                       print(f"Info for '{parent_result_key}': Identifier found, but no images associated with it.")
 
 
-                 url = metadata.get('nextPage')
+                 url = self._validate_next_page(metadata.get('nextPage'))
                  if not url: # No more pages
                       if identifier_status != 'Failed (Not Found)': # Avoid overwriting specific failure
                          if identifier_status == 'Processing': identifier_status = 'Completed'
@@ -1041,8 +1067,7 @@ class CivitaiDownloader:
         Searches for model IDs and names by tag, handling pagination and adding
         validation based on first page results and a maximum page limit.
         """
-        encoded_tag = tag_query.replace(" ", "%20")
-        url: Optional[str] = f"{MODELS_API_URL}?tag={encoded_tag}&nsfw=True"
+        url: Optional[str] = f"{MODELS_API_URL}?tag={quote(tag_query, safe='')}&nsfw=True"
         models_found: List[Tuple[int, str]] = []
         model_ids_seen: set[int] = set()
         MAX_SEARCH_PAGES = 500 # Define the limit as a constant (or make configurable?)
@@ -1103,8 +1128,8 @@ class CivitaiDownloader:
                          self.logger.debug(f"Found {new_models} new models for '{tag_query}' on page {page_count}.")
 
                      # Pagination
-                     url = metadata.get('nextPage')
-                     if url: await asyncio.sleep(1); 
+                     url = self._validate_next_page(metadata.get('nextPage'))
+                     if url: await asyncio.sleep(1);
                      else: break
                  else: # Fetch helper failed
                      self.logger.warning(f"Stopping model search pagination for '{tag_query}' due to fetch failure page {page_count}."); url = None; break
@@ -1308,7 +1333,7 @@ class CivitaiDownloader:
                      url_params = f"&nsfw=X&sort=Newest" if idt == 'username' else "&nsfw=X"
                      if idt == 'username':
                          target_dir = os.path.join(option_folder, self._clean_path_component(ident))
-                         url = f"{self.base_url}?username={ident}{url_params}"
+                         url = f"{self.base_url}?username={quote(ident, safe='')}{url_params}"
                          # Issue #41: Apply filter tags for Mode 1 if provided
                          if filter_tags:
                              tag_to_check = "_".join(filter_tags)
