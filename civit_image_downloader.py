@@ -56,7 +56,7 @@ DEFAULT_SEMAPHORE_LIMIT: int = 5
 DEFAULT_OUTPUT_DIR: str = "image_downloads"
 DATABASE_FILENAME: str = "tracking_database.sqlite" # <--- SQLite DB filename
 LOG_FILENAME_TEMPLATE: str = "civit_image_downloader_log_{version}.txt"
-SCRIPT_VERSION: str = "1.8" 
+SCRIPT_VERSION: str = "1.9"
 DEFAULT_TIMEOUT: int = 60
 DEFAULT_RETRIES: int = 2
 DEFAULT_MAX_PATH_LENGTH: int = 240
@@ -130,6 +130,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--retries", type=int, default=DEFAULT_RETRIES, help="Number of retries for failures.")
     parser.add_argument("--max_images", type=int, default=None, help="Maximum number of images to download (default: unlimited).")
     parser.add_argument("--max_per_model", type=int, default=None, help="Maximum images per model during tag searches (default: unlimited).")
+    parser.add_argument("--no_videos", action='store_true', help="Skip video files, download images only.")
     return parser.parse_args()
 
 # ==========================
@@ -191,6 +192,7 @@ class CivitaiDownloader:
         self.output_dir: str = os.path.abspath(args.output_dir)
         self.semaphore_limit: int = self._get_semaphore_limit()
         self.disable_sorting: bool = args.no_sort
+        self.skip_videos: bool = args.no_videos
         self.max_path_length: int = args.max_path
         self.num_retries: int = args.retries
 
@@ -603,16 +605,17 @@ class CivitaiDownloader:
         before_sleep=before_sleep_log(retry_logger, logging.WARNING)
     )
     async def download_image(self, image_api_item: Dict[str, Any], base_output_path: str) -> Tuple[bool, Optional[str], Optional[str]]:
-        """Downloads a single image, detects extension, saves, with retries."""
+        """Downloads a single image or video, detects extension, saves, with retries."""
         image_url = image_api_item.get('url')
         image_id = image_api_item.get('id')
+        is_video = image_api_item.get('type') == 'video'
         # Basic validation
         if not image_url or not image_id: return False, None, "Missing URL or ID in API data"
         if not base_output_path or not os.path.isdir(base_output_path): return False, None, f"Invalid target directory '{base_output_path}'"
 
-        # Prepare URL and path
+        # Prepare URL — videos already have original=true in their path, skip rewrite
         target_url = image_url
-        if self.quality == 'HD':
+        if self.quality == 'HD' and not is_video:
              target_url = re.sub(r"width=\d{3,4}", "original=true", image_url)
              if target_url == image_url: target_url += ('&' if '?' in target_url else '?') + "original=true"
              self.logger.debug(f"HD URL: {target_url}")
@@ -634,7 +637,13 @@ class CivitaiDownloader:
                     first_chunk = await anext(byte_iter, None)
                     if first_chunk is None: return False, None, "Downloaded empty file"
                     if file_extension is None: file_extension = detect_extension(first_chunk)
-                    if file_extension is None: file_extension = ".png" if self.quality == 'HD' else ".jpeg"
+                    if file_extension is None:
+                        # URL-based fallback for videos (e.g. URL ends with .mp4)
+                        url_lower = target_url.lower().split('?')[0]
+                        if url_lower.endswith('.mp4'): file_extension = '.mp4'
+                        elif url_lower.endswith('.webm'): file_extension = '.webm'
+                        elif is_video: file_extension = '.mp4'  # generic video fallback
+                        else: file_extension = ".png" if self.quality == 'HD' else ".jpeg"
 
                     # Path Construction
                     filename_base = self._clean_path_component(str(image_id))
@@ -852,6 +861,9 @@ class CivitaiDownloader:
             image_id = item.get('id');
             if not image_id: continue
             should_skip, skip_reason = False, None
+            # Skip videos if --no_videos flag is set
+            if self.skip_videos and item.get('type') == 'video':
+                skip_reason = "Video skipped (--no_videos)"; should_skip = True
             result_entry = self._get_result_entry(parent_result_key, model_id)
             # Redownload Check
             if self.allow_redownload == 2 and await self.check_if_image_downloaded(str(image_id), self.quality, context=parent_result_key):
@@ -1924,8 +1936,19 @@ class CivitaiDownloader:
             try:
                 # 1. Determine Target Directory based on meta file type and content
                 if meta_file.endswith('_no_meta.txt'):
-                    target_dir_for_pair = no_meta_dir
-                    self.logger.debug(f"Target for '{meta_file}' is no_metadata folder.")
+                    # Videos with no metadata go to videos/ instead of no_metadata/
+                    is_video_pair = any(
+                        (base_name + ext) in all_files_in_basedir
+                        for ext in ('.mp4', '.webm')
+                    )
+                    if is_video_pair:
+                        videos_dir = os.path.join(base_dir, 'videos')
+                        os.makedirs(videos_dir, exist_ok=True)
+                        target_dir_for_pair = videos_dir
+                        self.logger.debug(f"Target for '{meta_file}' is videos/ folder.")
+                    else:
+                        target_dir_for_pair = no_meta_dir
+                        self.logger.debug(f"Target for '{meta_file}' is no_metadata folder.")
                 elif meta_file.endswith('_meta.txt'):
                     model_name = None
                     try:
@@ -1949,8 +1972,19 @@ class CivitaiDownloader:
                          os.makedirs(target_dir_for_pair, exist_ok=True) # Ensure model subdir exists
                          self.logger.debug(f"Target for '{meta_file}' is model folder: '{model_subdir_name}'")
                     else:
-                         target_dir_for_pair = invalid_meta_dir
-                         self.logger.debug(f"Target for '{meta_file}' is invalid_metadata folder.")
+                         # Check if corresponding file is a video — route to videos/ instead of invalid_metadata/
+                         is_video_pair = any(
+                             (base_name + ext) in all_files_in_basedir
+                             for ext in ('.mp4', '.webm')
+                         )
+                         if is_video_pair:
+                             videos_dir = os.path.join(base_dir, 'videos')
+                             os.makedirs(videos_dir, exist_ok=True)
+                             target_dir_for_pair = videos_dir
+                             self.logger.debug(f"Target for '{meta_file}' is videos/ folder.")
+                         else:
+                             target_dir_for_pair = invalid_meta_dir
+                             self.logger.debug(f"Target for '{meta_file}' is invalid_metadata folder.")
 
                 if not target_dir_for_pair: # Safety check
                     self.logger.error(f"Logic error: Could not determine target directory for {meta_file}. Skipping.")
