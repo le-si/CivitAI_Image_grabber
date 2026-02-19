@@ -4,8 +4,9 @@ It downloads all the images and Videos from a provided Username, Model ID or Mod
 Should the API not spit out all the data for all images then I'm sorry. 
 The script can only download where data is provided.
 
-The files are downloaded into a folder with the name of the user, ModelID or the TAG <br /> 
-Second Level is the Model Name with which the image was generated. Videos without model metadata are placed in a dedicated `videos/` subfolder.
+The files are downloaded into a folder with the name of the `user`, `ModelID` or the `TAG` <br /> 
+Second Level is the `Model Name` with which the image was generated.<br />
+Videos without model metadata are placed in a dedicated `videos/` subfolder.
 
 
 
