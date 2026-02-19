@@ -1,11 +1,11 @@
 # Civit Image grabber
 
-It downloads all the images from a provided Username, Model ID or Model TAG from CivitAI. 
+It downloads all the images and Videos from a provided Username, Model ID or Model TAG from CivitAI. 
 Should the API not spit out all the data for all images then I'm sorry. 
 The script can only download where data is provided.
 
-The images are Downloaded into a folder with the name of the user, ModelID or the TAG <br /> 
-Second Level is the Model Name with which the image was generated.
+The files are downloaded into a folder with the name of the user, ModelID or the TAG <br /> 
+Second Level is the Model Name with which the image was generated. Videos without model metadata are placed in a dedicated `videos/` subfolder.
 
 
 
@@ -46,10 +46,11 @@ the script will ask you to:
 
 1.  `Enter timeout value (seconds) [default: 60]:`
 2.  `Choose image quality (1=SD, 2=HD) [default: 1]:`
-3.  `Allow re-downloading tracked items? (1=Yes, 2=No) [default: 2]:` 
-4.  `Choose mode (1=user, 2=model ID, 3=tag search, 4=model version ID):` 
-5.  `Enter max concurrent downloads [default: 5]:` 
-6.  *(Mode-specific prompts):*
+3.  `Allow re-downloading tracked items? (1=Yes, 2=No) [default: 2]:`
+4.  `Skip video files? (y/n) [default: n]:`
+5.  `Choose mode (1=user, 2=model ID, 3=tag search, 4=model version ID):` 
+6.  `Enter max concurrent downloads [default: 5]:` 
+7.  *(Mode-specific prompts):*
     *   Mode 1: `Enter username(s) (, separated):`
     *   Mode 1: `Enter filter tag(s) (comma-separated, optional, press Enter to skip):` (Optional: filter images by tags)
     *   Mode 1: `Disable prompt check? (y/n) [default: n]:` (If filter tags are provided)
@@ -82,6 +83,7 @@ Provide arguments directly on the command line. Unspecified arguments will use t
 *   `--output_dir PATH` (Default: "image_downloads")
 *   `--semaphore_limit INT` (Default: 5)
 *   `--no_sort` (Disables model subfolder sorting, Default: False/Sorting enabled)
+*   `--no_videos` (Skip video files, download images only, Default: False)
 *   `--max_path INT` (Default: 240)
 *   `--retries INT` (Default: 2)
 *   `--max_images INT` (Limit total images downloaded, Default: unlimited) 
@@ -116,8 +118,11 @@ Provide arguments directly on the command line. Unspecified arguments will use t
 *   Download images from tag search with per-model limit (balanced sampling):
     ```bash
     python civit_image_downloader.py --mode 3 --tags "landscape" --max_per_model 50 --max_images 500
-
-
+    ```
+*   To skip all video files returned by the API:
+    ```bash
+    python civit_image_downloader.py --mode 1 --username "artist1" --no_videos
+    ```
 
 ## Mixed Mode
 
@@ -136,78 +141,94 @@ image_downloads/
 ├── Username_Search/
 │   └── [Username]/
 │       ├── [Model Name Subfolder]/  # Based on image metadata 'Model' field
-│       │   ├── [ImageID].jpeg       # or .png, .webp, .mp4, .webm
+│       │   ├── [ImageID].jpeg       # or .png, .webp
 │       │   └── [ImageID]_meta.txt
+│       ├── videos/                  # Videos without parsable model metadata (.mp4, .webm)
+│       │   ├── [ImageID].mp4        # or .webm
+│       │   └── [ImageID]_no_meta.txt (or _meta.txt)
 │       ├── invalid_metadata/        # For images with meta but no parsable 'Model' field
-│       │   ├── [ImageID].jpeg 
+│       │   ├── [ImageID].jpeg
 │       │   └── [ImageID]_meta.txt
-│       └── no_metadata/             # For images with no metadata found
-│           ├── [ImageID].jpeg 
+│       └── no_metadata/             # For images (non-video) with no metadata found
+│           ├── [ImageID].jpeg
 │           └── [ImageID]_no_meta.txt
 ├── Model_ID_Search/
 │   └── model_[ModelID]/
 │       ├── [Model Name Subfolder]/
-│       │   └── [ImageID].jpeg
+│       │   ├── [ImageID].jpeg
 │       │   └── [ImageID]_meta.txt
+│       ├── videos/                  # Videos without parsable model metadata (.mp4, .webm)
+│       │   ├── [ImageID].mp4
+│       │   └── [ImageID]_no_meta.txt (or _meta.txt)
 │       ├── invalid_metadata/
-│       │   └── [ImageID].jpeg
+│       │   ├── [ImageID].jpeg
 │       │   └── [ImageID]_meta.txt
 │       └── no_metadata/
-│           └── [ImageID].jpeg
+│           ├── [ImageID].jpeg
 │           └── [ImageID]_no_meta.txt
-│ 
+│
 ├── Model_Version_ID_Search/
 │   └── modelVersion_[VersionID]/
 │       ├── [Model Name Subfolder]/
-│       │   └── [ImageID].jpeg
+│       │   ├── [ImageID].jpeg
 │       │   └── [ImageID]_meta.txt
+│       ├── videos/                  # Videos without parsable model metadata (.mp4, .webm)
+│       │   ├── [ImageID].mp4
+│       │   └── [ImageID]_no_meta.txt (or _meta.txt)
 │       ├── invalid_metadata/
-│       │   └── [ImageID].jpeg
+│       │   ├── [ImageID].jpeg
 │       │   └── [ImageID]_meta.txt
 │       └── no_metadata/
-│           └── [ImageID].jpeg
+│           ├── [ImageID].jpeg
 │           └── [ImageID]_no_meta.txt
 └── Model_Tag_Search/
     └── [Sanitized_Tag_Name]/         # e.g., sci_fi_vehicle
         ├── model_[ModelID]/          # Folder for each model found under the tag
-        │   ├── [Model Name Subfolder]/ # Sorting within model folder
-        │   └── [ImageID].jpeg
-        │   └── [ImageID]_meta.txt
+        │   ├── [Model Name Subfolder]/
+        │   │   ├── [ImageID].jpeg
+        │   │   └── [ImageID]_meta.txt
+        │   ├── videos/               # Videos without parsable model metadata (.mp4, .webm)
+        │   │   ├── [ImageID].mp4
+        │   │   └── [ImageID]_no_meta.txt (or _meta.txt)
         │   ├── invalid_metadata/
-        │   └── [ImageID].jpeg
-        │   └── [ImageID]_meta.txt
+        │   │   ├── [ImageID].jpeg
+        │   │   └── [ImageID]_meta.txt
         │   └── no_metadata/
-        │   └── [ImageID].jpeg
-        │   └── [ImageID]_no_meta.txt
-        └── summary_[Sanitized_Tag_Name]_[YYYYMMDD].csv 
+        │       ├── [ImageID].jpeg
+        │       └── [ImageID]_no_meta.txt
+        └── summary_[Sanitized_Tag_Name]_[YYYYMMDD].csv
 ```
 
 **With Sorting Disabled (`--no_sort`)**
 
-All images and metadata files for a given identifier (username, model ID, model version ID, or model ID within a tag) are placed directly within that identifier's folder, without the `[Model Name Subfolder]`, `invalid_metadata`, or `no_metadata` subdirectories.
+All images, videos and metadata files for a given identifier (username, model ID, model version ID, or model ID within a tag) are placed directly within that identifier's folder, without the `[Model Name Subfolder]`, `videos/`, `invalid_metadata`, or `no_metadata` subdirectories.
 
 ```
 image_downloads/
 ├── Username_Search/
 │   └── [Username]/
-│       ├── [ImageID].jpeg
+│       ├── [ImageID].jpeg        # or .png, .webp
+│       ├── [ImageID].mp4         # or .webm (videos)
 │       ├── [ImageID]_meta.txt
 │       └── [ImageID]_no_meta.txt
 ├── Model_ID_Search/
 │   └── model_[ModelID]/
 │       ├── [ImageID].jpeg
+│       ├── [ImageID].mp4
 │       └── ...
 ├── Model_Version_ID_Search/
 │   └── modelVersion_[VersionID]/
 │       ├── [ImageID].jpeg
+│       ├── [ImageID].mp4
 │       └── ...
 └── Model_Tag_Search/
     └── [Sanitized_Tag_Name]/
         ├── model_[ModelID]/
         │   ├── [ImageID].jpeg
+        │   ├── [ImageID].mp4
         │   ├── [ImageID]_meta.txt
         │   └── [ImageID]_no_meta.txt
-        └── summary_[Sanitized_Tag_Name]_[YYYYMMDD].csv # CSV still in tag folder
+        └── summary_[Sanitized_Tag_Name]_[YYYYMMDD].csv
 ```
 
 ---
@@ -230,14 +251,34 @@ python migrate_json_to_sqlite.py
 
 # Update History
 
+## 2.0 New Features
+
+**Video Download Support** 
+
+- The script now detects and downloads video files automatically — no configuration required. 
+- Detects `type: "video"` items in API responses and downloads them as `.mp4` or `.webm`
+- Videos are routed to a dedicated `videos/` subfolder inside the identifier folder (all modes)
+
+**Skip videos (`--no_videos`):**
+
+Users who only want images can pass `--no_videos` to skip all video files returned by the API. Skipped videos appear in the end-of-run skip summary.
+
+```bash
+python civit_image_downloader.py --mode 1 --username "artist1" --no_videos
+```
+in the Interactive Mode it will  ask you 
+4.  `Skip video files? (y/n) [default: n]:`
+
 ## 1.9 Security Update 
 
-Fix 1 — SSRF protection (_validate_next_page()):                                                                                                                                                                                    
+**Fix 1 — SSRF protection (_validate_next_page()):**
+
   - Any nextPage URL from the API now passes three checks before being followed: must be https://, must be ``` civitai.com or www.civitai.com,``` must start with /api/                                                                      
   - Applied to both pagination loops (_run_paginated_download and _search_models_by_tag)                                                                                                                                              
   - Invalid URLs log a warning and stop pagination gracefully rather than raising
 
- Fix 2 — URL encoding (quote()):                                                                                                                                                                                                     
+ **Fix 2 — URL encoding (quote()):**
+ 
   - username in Mode 1: quote(ident, safe='') — handles any special character a CivitAI username could contain                                                                                                                        
   - Tag in _search_models_by_tag: replaces the partial .replace(" ", "%20") with proper RFC 3986 encoding       
 
