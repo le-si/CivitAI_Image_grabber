@@ -120,7 +120,7 @@ Provide arguments directly on the command line. Unspecified arguments will use t
     ```bash
     python civit_image_downloader.py --mode 3 --tags "landscape" --max_per_model 50 --max_images 500
     ```
-*   To skip all video files returned by the API:
+*   To skip all video files:
     ```bash
     python civit_image_downloader.py --mode 1 --username "artist1" --no_videos
     ```
