@@ -192,7 +192,7 @@ class CivitaiDownloader:
         self.output_dir: str = os.path.abspath(args.output_dir)
         self.semaphore_limit: int = self._get_semaphore_limit()
         self.disable_sorting: bool = args.no_sort
-        self.skip_videos: bool = args.no_videos
+        self.skip_videos: bool = self._get_skip_videos()
         self.max_path_length: int = args.max_path
         self.num_retries: int = args.retries
 
@@ -358,6 +358,13 @@ class CivitaiDownloader:
                 if inp == '1' or inp == '': return 'SD'
                 print("Invalid choice.")
         else: return 'SD' 
+
+    def _get_skip_videos(self) -> bool:
+        if self.args.no_videos: return True
+        elif self._is_interactive_mode():
+            inp = input("Skip video files? (y/n) [default: n]: ").strip().lower()
+            return inp == 'y'
+        return False
 
     def _get_redownload_option(self) -> int:
         if self.args.redownload == 1: return 1 
